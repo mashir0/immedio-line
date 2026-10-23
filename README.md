@@ -2,6 +2,11 @@
 
 同じGoogle Workspace組織の社員が、**1つの共通URL**から利用するGoogle Apps Script Webアプリです。利用者によるシートのコピー・コマンド操作・GAS作成・個別デプロイは不要です。
 
+## ドキュメント
+
+- [要件定義書](docs/requirements-functional.md)：合意済み要件、追加候補、受入基準、未確定事項。
+- [Progress（実装・検証状況）](docs/progress.md)：要件別の実装状況、未実装機能、既知不具合、実環境の確認状況。
+
 ## 構成
 
 | 項目 | 内容 |
