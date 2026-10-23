@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>通知設定 | Calendar → LINE</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif; color: #172a29; background: #f5f7f6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-size: 15px; line-height: 1.7; }
+    main { max-width: 1000px; margin: auto; padding: 32px 24px 56px; }
+    header, .section-heading, .actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    header { justify-content: space-between; margin-bottom: 20px; }
+    h1 { font-size: 25px; margin: 0; letter-spacing: .02em; }
+    h2 { font-size: 18px; margin: 0 0 16px; }
+    p { margin: 8px 0; }
+    .subtitle, .hint { color: #526360; font-size: 13px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    section { padding: 24px; border: 1px solid #d7e0dd; border-radius: 12px; background: white; margin-bottom: 20px; min-width: 0; }
+    .grid section { margin-bottom: 0; }
+    label { display: block; font-weight: 600; margin: 16px 0 6px; }
+    input, select, button { font: inherit; }
+    input, select { width: 100%; padding: 10px 12px; border: 1px solid #82948e; border-radius: 6px; background: white; color: inherit; }
+    button { padding: 10px 16px; border: 1px solid #718680; border-radius: 6px; background: white; color: #193c34; cursor: pointer; font-weight: 600; min-height: 44px; }
+    button.primary { background: #185746; color: white; border-color: #185746; }
+    button:disabled { cursor: not-allowed; opacity: .5; background: #edf0ee; color: #87928e; border-color: #cdd4d1; }
+    :focus-visible { outline: 3px solid #a75b00; outline-offset: 3px; }
+    .actions { margin-top: 20px; }
+    .pill { display: inline-block; padding: 3px 12px; background: #e9f0ec; border: 1px solid #b8cdc2; border-radius: 100px; font-size: 13px; }
+    dl { display: grid; grid-template-columns: 130px 1fr; gap: 8px 16px; margin: 16px 0 0; }
+    dt { color: #526360; } dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+    #notice { padding: 12px 16px; border: 1px solid #becfc6; background: #edf4ef; border-radius: 8px; overflow-wrap: anywhere; }
+    #notice:empty { display: none; }
+    #notice[data-kind="error"] { background: #fff0ec; border-color: #bc7664; color: #7c2814; }
+    #config-state { font-weight: 600; }
+    .field-help { margin-top: 8px; color: #435650; font-size: 13px; overflow-wrap: anywhere; }
+    .field-help summary { display: list-item; cursor: pointer; color: #185746; padding: 10px 0; min-height: 44px; text-decoration: underline; text-underline-offset: 3px; }
+    .field-help summary:hover { color: #102f27; }
+    .field-help[open] { padding: 0 12px 12px; border: 1px solid #d7e0dd; border-radius: 6px; background: #f5f7f6; }
+    .field-help ol { margin: 4px 0 8px; padding-left: 22px; }
+    .field-help li + li { margin-top: 8px; }
+    .token-field { position: relative; }
+    .token-field input { padding-right: 56px; }
+    .token-toggle { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); width: 44px; height: 44px; min-height: 44px; padding: 10px; border: 0; background: transparent; }
+    .token-toggle svg { display: block; width: 24px; height: 24px; }
+    .token-toggle .eye-closed, .token-toggle[data-visible="true"] .eye-open { display: none; }
+    .token-toggle[data-visible="true"] .eye-closed { display: block; }
+    .field-error { color: #7c2814; font-size: 13px; overflow-wrap: anywhere; }
+    .field-error:empty { display: none; }
+    .operations { margin-top: 20px; }
+    @media (max-width: 680px) { main { padding: 20px 16px 40px; } .grid { grid-template-columns: 1fr; } section { padding: 20px; } dl { grid-template-columns: 1fr; gap: 2px; } dd { margin-bottom: 10px; } .actions button { flex: 1 1 auto; } }
+  </style>
+</head>
+<body>
+  <main id="dashboard" aria-busy="true">
+    <header>
+      <div><h1>通知設定</h1><p class="subtitle">Google カレンダー → LINE / 社内共通アプリ</p></div>
+      <button id="refresh" type="button">状態を更新</button>
+    </header>
+    <p class="hint">はじめての手順: Google権限承認済み → カレンダー設定を保存 → LINE設定を保存 → テスト → 開始</p>
+    <p id="first-use" class="hint" role="status" hidden></p>
+    <p id="notice" role="status" aria-live="polite" aria-atomic="true"></p>
+    <section aria-labelledby="status-heading">
+      <div class="section-heading"><h2 id="status-heading">監視の状態</h2><span id="status-pill" class="pill">未取得</span></div>
+      <p id="status-text">読み込み中…</p>
+      <dl>
+        <dt>ログイン中</dt><dd id="account-email">未取得</dd>
+        <dt>最終確認</dt><dd id="last-checked">未取得</dd>
+        <dt>トリガー</dt><dd id="trigger-health">未取得</dd>
+        <dt>通知キュー</dt><dd id="queue-counts">未取得</dd>
+        <dt>保存済み設定</dt><dd id="saved-config">未取得</dd>
+        <dt>稼働中の設定</dt><dd id="active-config">未取得</dd>
+      </dl>
+      <p id="config-state" class="hint"></p>
+      <p class="hint">カレンダー変更トリガーで監視し、5分ごとの復旧トリガーで取りこぼしを確認します。</p>
+    </section>
+    <div class="grid">
+      <section aria-labelledby="calendar-heading">
+        <h2 id="calendar-heading">カレンダー</h2>
+        <form id="settings-form">
+          <label for="calendar-id">カレンダーID</label>
+          <input id="calendar-id" name="calendarId" value="primary" type="text" aria-describedby="calendar-help calendar-guide" autocomplete="off" required>
+          <p id="calendar-help" class="hint">自分のメインカレンダーは primary を指定します。</p>
+          <details id="calendar-guide" class="field-help">
+            <summary>カレンダーIDの取得方法</summary>
+            <p>自分のメインカレンダーだけを使う場合は、primary のままでOKです。</p>
+            <ol>
+              <li>PC版のGoogleカレンダーを開き、左側の対象カレンダーにマウスを合わせます。</li>
+              <li>「︙ → 設定と共有」を開きます。右上の歯車 →「設定」から対象カレンダーを選んでも構いません。</li>
+              <li>「カレンダーの統合」にある「カレンダーID」をコピーして、この欄へ貼り付けます。</li>
+            </ol>
+            <p>カレンダーの表示名、公開URL、埋め込みコードではありません。共有カレンダーの場合も同じ手順です。今ログインしている会社アカウントに、そのカレンダーの予定を確認できる閲覧権限が必要です。</p>
+          </details>
+          <label for="prefix">件名のプレフィックス</label>
+          <input id="prefix" name="prefix" type="text" autocomplete="off" aria-describedby="prefix-help">
+          <p id="prefix-help" class="hint">件名の先頭と文字どおりに照合します。空白もそのまま保存します。</p>
+          <p id="settings-error" class="field-error" role="alert"></p>
+          <div class="actions"><button id="save-settings" class="primary" type="submit">カレンダー設定を保存</button></div>
+        </form>
+      </section>
+      <section aria-labelledby="line-heading">
+        <h2 id="line-heading">LINE 送信先</h2>
+        <form id="line-form">
+          <label for="line-type">送信先の種類</label>
+          <select id="line-type" name="type"><option value="user">ユーザー</option><option value="group">グループ</option></select>
+          <label id="recipient-label" for="line-recipient">Messaging API User ID</label>
+          <input id="line-recipient" name="recipient" type="text" autocomplete="off" aria-describedby="recipient-help" required>
+          <details id="recipient-help" class="field-help">
+            <summary id="recipient-summary">Messaging API User IDの取得方法</summary>
+            <div id="recipient-user-guide">
+            <ol>
+              <li>LINE Developersコンソールを開き、対象のプロバイダー → この通知に使うMessaging APIチャネルを選びます。</li>
+              <li>「チャネル基本設定」タブを開き、下の方の「あなたのユーザーID」をコピーします。</li>
+              <li>Uで始まる33文字の値を、この入力欄へ貼り付けます。送信先の種類は「ユーザー」を選び、通知用のLINE公式アカウントを友だち追加してください。</li>
+            </ol>
+            <p>プロバイダーID・チャネルID・友だち検索用のLINE IDではありません。「あなたのユーザーID」がない場合は、ビジネスIDとLINEアカウントの連携を確認してください。</p>
+            <p>対象チャネルが見つからない場合は、LINE Official Account Managerの「設定 → Messaging API → Messaging APIを利用する」を先に完了してください。</p>
+            </div>
+            <div id="recipient-group-guide" hidden>
+              <ol>
+                <li>LINE Developersで、通知に使うMessaging APIチャネル →「Messaging API設定」を開き、「グループトーク・複数人トークへの参加を許可する」を有効にします。</li>
+                <li>LINEアプリで、通知用のLINE公式アカウントを対象グループへ招待します。同じグループに複数のLINE公式アカウントは参加できません。</li>
+                <li>グループIDの取得には、管理者が用意した信頼できるWebhook受信先が必要です。同じチャネルの「Webhook設定」で受信先URLを設定し、「Webhookの利用」を有効にします。既存の受信先がある場合は、別の連携を止めないよう管理者へ確認してください。</li>
+                <li>対象グループでメッセージを送り、受信先でLINEの署名を検証したイベントの<code>source.groupId</code>を確認します。<code>source.userId</code>ではありません。Cで始まる33文字の値がグループIDです。</li>
+                <li>この画面の種類を「グループ」にし、取得したIDを「Messaging API Group ID」欄へ入力します。同じ公式アカウントのチャネルアクセストークンも必要です。グループ名・招待URL・個人のUser IDでは送信できません。</li>
+                <li>「LINE設定を保存」後、「テスト送信」で対象グループへの到着を確認します。メッセージはグループの全メンバーに表示され、通知枠を消費します。</li>
+              </ol>
+              <p>このアプリにはWebhook受信機能はありません。受信先が未用意の場合は、先に管理者による受信先の準備・グループIDの取得が必要です。個人宛ての設定のまま招待しても、通知先はグループへ切り替わりません。</p>
+            </div>
+          </details>
+          <label for="line-token">チャネルアクセストークン（Channel access token）</label>
+          <div class="token-field">
+            <input id="line-token" name="token" type="password" autocomplete="new-password" spellcheck="false" aria-describedby="token-help token-state token-guide">
+            <button id="toggle-token" class="token-toggle" type="button" aria-label="トークンを表示" aria-pressed="false" aria-controls="line-token" title="トークンを表示" data-visible="false">
+              <svg class="eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              <svg class="eye-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 3l18 18M10 5.2a12 12 0 0 1 2-.2c6.5 0 10 7 10 7a20 20 0 0 1-3.4 4.2M6.2 6.2A22 22 0 0 0 2 12s3.5 7 10 7c1.6 0 3-.4 4.3-1M10 10a3 3 0 0 0 4 4"></path></svg>
+            </button>
+          </div>
+          <details id="token-guide" class="field-help">
+            <summary>チャネルアクセストークンの取得方法</summary>
+            <ol>
+              <li>LINE Developersコンソールで、通知を送信するLINE公式アカウントのMessaging APIチャネルを開きます。ユーザー宛て・グループ宛てのどちらでもトークンは必要です。</li>
+              <li>「Messaging API設定」タブを開き、下の方の「チャネルアクセストークン（長期）」で「発行」を押します。</li>
+              <li>発行された値をコピーして、このパスワード欄へ貼り付け、「LINE設定を保存」を押します。</li>
+            </ol>
+            <p>チャネルIDやチャネルシークレットではありません。トークンはチャットや共有文書へ貼らず、この入力欄に直接登録してください。再発行すると、同じ古いトークンを使う別の連携にも影響するため注意してください。</p>
+          </details>
+          <p id="token-help" class="hint">空欄で保存するとトークンを削除します。</p>
+          <p id="token-state" class="hint">登録状態: 未取得</p>
+          <p id="line-state" class="hint" aria-live="polite"></p>
+          <p id="line-error" class="field-error" role="alert"></p>
+          <div class="actions"><button id="save-line" class="primary" type="submit">LINE設定を保存</button></div>
+        </form>
+      </section>
+    </div>
+    <section class="operations" aria-labelledby="operations-heading">
+      <h2 id="operations-heading">監視の操作</h2>
+      <p class="hint">カレンダー設定の保存だけでは稼働中の監視は変わりません。保存後に「監視を開始・更新」で適用します。</p>
+      <p class="hint">開始・再開や監視対象の変更時は初期同期します。同じ設定での更新は監視基準を維持します。テスト送信は実際のLINE通知枠を消費します。</p>
+      <div class="actions">
+        <button id="start" class="primary" type="button">監視を開始・更新</button>
+        <button id="stop" type="button">監視を停止</button>
+        <button id="test" type="button">テスト送信</button>
+      </div>
+    </section>
+  </main>
+  <script>
+  (() => {
+    'use strict';
+    const el = id => document.getElementById(id);
+    const buttons = ['refresh', 'save-settings', 'save-line', 'start', 'stop', 'test', 'toggle-token'];
+    function busy(value) {
+      buttons.forEach(id => { el(id).disabled = value; });
+      el('dashboard').setAttribute('aria-busy', String(value));
+      if (!value) configState();
+    }
+    function notice(message, kind = 'info') {
+      el('notice').textContent = message;
+      el('notice').dataset.kind = kind;
+    }
+    if (typeof google === 'undefined' || !google.script || !google.script.run) {
+      notice('GAS上で開いてください。デプロイ済みのWebアプリURLからアクセスしてください。', 'error');
+      busy(true);
+      el('dashboard').setAttribute('aria-busy', 'false');
+      return;
+    }
+    let snapshot = null;
+    let inFlight = false;
+    let recipientType = 'user';
+    const recipientDrafts = { user: '', group: '' };
+    function tokenVisibility(visible) {
+      el('line-token').type = visible ? 'text' : 'password';
+      const label = visible ? 'トークンを非表示' : 'トークンを表示';
+      el('toggle-token').setAttribute('aria-pressed', String(visible));
+      el('toggle-token').setAttribute('aria-label', label);
+      el('toggle-token').title = label;
+      el('toggle-token').dataset.visible = String(visible);
+    }
+    function recipientGuide() {
+      const group = el('line-type').value === 'group';
+      el('recipient-label').textContent = group ? 'Messaging API Group ID' : 'Messaging API User ID';
+      el('recipient-summary').textContent = group ? 'グループ通知の設定方法・Group IDの取得方法' : 'Messaging API User IDの取得方法';
+      el('recipient-user-guide').hidden = group;
+      el('recipient-group-guide').hidden = !group;
+      el('line-recipient').placeholder = group ? 'Cで始まる33文字のグループID' : 'Uで始まる33文字のユーザーID';
+    }
+    function lineValidationError() {
+      const type = el('line-type').value;
+      if (!['user', 'group'].includes(type)) return '送信先の種類を選択してください。';
+      const id = el('line-recipient').value.trim();
+      const pattern = type === 'group' ? /^C[0-9a-f]{32}$/ : /^U[0-9a-f]{32}$/;
+      if (!pattern.test(id)) return type === 'group' ? 'Group IDはC＋32桁の半角16進数で入力してください。' : 'User IDはU＋32桁の半角16進数で入力してください。';
+      const token = el('line-token').value;
+      if (/[\x00-\x1f\x7f]/.test(token) || token.length > 4000) return 'トークンは改行・制御文字を含めず4000文字以内で入力してください。';
+      return '';
+    }
+    function settingsValidationError() {
+      const id = el('calendar-id').value.trim();
+      const prefix = el('prefix').value;
+      if (!id || id.length > 1024) return 'カレンダーIDを1024文字以内で入力してください。';
+      if (!prefix.trim() || prefix.length > 200) return 'プレフィックスを200文字以内で入力してください。';
+      return '';
+    }
+    function configState() {
+      recipientGuide();
+      if (!snapshot) { el('save-settings').disabled = true; el('save-line').disabled = true; return; }
+      const dirty = el('calendar-id').value !== snapshot.settings.calendarId || el('prefix').value !== snapshot.settings.prefix;
+      const unapplied = !snapshot.monitoring.enabled || snapshot.settings.calendarId !== (snapshot.monitoring.requestedCalendarId || snapshot.monitoring.calendarId) || snapshot.settings.prefix !== snapshot.monitoring.prefix;
+      el('config-state').textContent = dirty ? 'カレンダー設定に未保存の変更があります。' : snapshot.initialized === false ? '初期値を表示中です。まずカレンダー設定を保存してください。' : unapplied ? '保存済み設定は未適用です。「監視を開始・更新」で適用してください。' : '保存済み設定で監視しています。';
+      const settingsError = settingsValidationError();
+      el('settings-error').textContent = settingsError;
+      el('save-settings').disabled = inFlight || !!settingsError || (!dirty && snapshot.initialized !== false);
+      const lineDirty = el('line-type').value !== snapshot.line.type || el('line-recipient').value !== snapshot.line.recipient || el('line-token').value !== (snapshot.line.token || '');
+      const lineError = lineValidationError();
+      el('line-error').textContent = lineError;
+      el('save-line').disabled = inFlight || !!lineError || (!lineDirty && snapshot.initialized !== false);
+      el('line-state').textContent = snapshot.initialized === false ? 'LINE設定を入力して保存してください。' : lineDirty ? 'LINE設定に未保存の変更があります。テスト送信には保存済み設定を使います。' : 'LINE設定は保存済みです。';
+    }
+    function render(data) {
+      const fields = { 'calendar-id': ['settings', 'calendarId'], prefix: ['settings', 'prefix'], 'line-type': ['line', 'type'], 'line-recipient': ['line', 'recipient'], 'line-token': ['line', 'token'] };
+      Object.keys(fields).forEach(id => {
+        const [group, key] = fields[id];
+        if ((!snapshot && (id !== 'line-token' || el(id).value === '')) || (snapshot && el(id).value === (snapshot[group][key] || ''))) el(id).value = data[group][key] || '';
+      });
+      el('account-email').textContent = (data.account && data.account.email) || '取得できませんでした';
+      el('first-use').textContent = '初回の設定保存時に、自分のDriveへ履歴用スプレッドシートを作成します。共有や普段のセル操作は不要です。';
+      el('first-use').hidden = data.initialized !== false;
+      el('line-token').placeholder = data.line.hasToken ? '••••••••（登録済み）' : 'チャネルアクセストークンを入力';
+      el('token-state').textContent = data.line.hasToken ? 'トークン: 登録済み（目のアイコンで確認）' : 'トークン: 未登録';
+      el('status-pill').textContent = data.monitoring.enabled ? '監視中' : '停止中';
+      el('status-text').textContent = data.status.state + ' — ' + data.status.detail;
+      el('last-checked').textContent = data.status.lastChecked || '未確認';
+      el('trigger-health').textContent = 'カレンダー: ' + (data.monitoring.calendarTrigger ? 'あり' : 'なし') + ' / 復旧: ' + (data.monitoring.recoveryTrigger ? 'あり' : 'なし');
+      el('queue-counts').textContent = '待機: ' + data.counts.pending + ' / 要確認: ' + data.counts.review + ' / ブロック: ' + data.counts.blocked;
+      el('saved-config').textContent = data.initialized === false ? '未保存（初期値を表示中）' : 'ID: ' + data.settings.calendarId + ' / プレフィックス: 「' + data.settings.prefix + '」';
+      el('active-config').textContent = data.monitoring.enabled ? 'ID: ' + data.monitoring.calendarId + ' / プレフィックス: 「' + data.monitoring.prefix + '」' : '停止中';
+      snapshot = data;
+      recipientType = el('line-type').value;
+      recipientDrafts[recipientType] = el('line-recipient').value;
+      configState();
+    }
+    function request(method, args, onSuccess) {
+      if (inFlight) return;
+      inFlight = true;
+      busy(true);
+      notice('処理中…');
+      const failure = error => {
+        inFlight = false;
+        busy(false);
+        notice('エラー: ' + (error.message || String(error)), 'error');
+      };
+      try {
+        const runner = google.script.run.withSuccessHandler(result => {
+          inFlight = false;
+          try { onSuccess(result); } catch (error) { failure(error); return; }
+          if (!inFlight) busy(false);
+        }).withFailureHandler(failure);
+        runner[method](...args);
+      } catch (error) { failure(error); }
+    }
+    function refresh() {
+      request('getDashboard', [], data => { render(data); notice('状態を取得しました。入力中の変更は保持しています。'); });
+    }
+    ['calendar-id', 'prefix'].forEach(id => el(id).addEventListener('input', configState));
+    function changeRecipientType() {
+      const next = el('line-type').value;
+      if (!['user', 'group'].includes(next)) { configState(); return; }
+      if (next !== recipientType) {
+        recipientDrafts[recipientType] = el('line-recipient').value;
+        el('line-recipient').value = recipientDrafts[next];
+      }
+      recipientType = next;
+      configState();
+    }
+    el('line-type').addEventListener('input', changeRecipientType);
+    el('line-type').addEventListener('change', changeRecipientType);
+    ['line-recipient', 'line-token'].forEach(id => {
+      el(id).addEventListener('input', configState);
+      el(id).addEventListener('change', configState);
+    });
+    el('toggle-token').addEventListener('click', () => {
+      tokenVisibility(el('line-token').type === 'password');
+    });
+    el('refresh').addEventListener('click', refresh);
+    el('settings-form').addEventListener('submit', event => {
+      event.preventDefault();
+      configState();
+      if (inFlight || el('save-settings').disabled) return;
+      request('saveDashboardSettings', [{ calendarId: el('calendar-id').value, prefix: el('prefix').value }], data => {
+        render(data);
+        notice('カレンダー設定を保存しました。稼働への適用には「監視を開始・更新」を実行してください。');
+      });
+    });
+    el('line-form').addEventListener('submit', event => {
+      event.preventDefault();
+      configState();
+      if (inFlight || el('save-line').disabled) return;
+      const submitted = { type: el('line-type').value, recipient: el('line-recipient').value, token: el('line-token').value };
+      request('saveLineSettings', [submitted], result => {
+        if (!result.saved) throw new Error('LINE設定の保存を確認できませんでした。');
+        if (snapshot) snapshot.line = { ...snapshot.line, ...submitted, token: submitted.token };
+        configState();
+        request('getDashboard', [], data => { render(data); notice('LINE設定を保存しました。'); });
+      });
+    });
+    const operations = {
+      start: { method: 'startFromWeb', args: [], prompt: '保存済みの設定で監視を開始・更新します。再開や対象変更時は基準を作り直します。同じ設定の更新は基準を維持します。未保存の入力は適用されません。続けますか？' },
+      stop: { method: 'stopFromWeb', args: [], prompt: '監視を停止します。再開するまでカレンダーの変更通知は行われません。停止しますか？' },
+      test: { method: 'testFromWeb', args: [{ confirmed: true }], prompt: '保存済みのLINE送信先へ実際にテスト通知を送信します。LINEの通知枠（クォータ）を消費します。送信しますか？' }
+    };
+    Object.keys(operations).forEach(id => el(id).addEventListener('click', () => {
+      if (inFlight) return;
+      const operation = operations[id];
+      if (!window.confirm(operation.prompt)) return;
+      request(operation.method, operation.args, result => { render(result.dashboard); notice(result.message); });
+    }));
+    refresh();
+  })();
+  </script>
+</body>
+</html>

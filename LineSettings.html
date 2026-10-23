@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <base target="_top">
+  <style>
+    body { font: 14px system-ui, sans-serif; color: #222; padding: 12px; }
+    label { display: block; margin: 14px 0 5px; font-weight: 600; }
+    input, select { width: 100%; box-sizing: border-box; padding: 9px; border: 1px solid #aaa; border-radius: 4px; }
+    button { margin-top: 16px; padding: 9px 24px; cursor: pointer; }
+    .note { font-size: 12px; color: #555; line-height: 1.6; }
+    #status { white-space: pre-wrap; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <form id="line-form">
+    <label for="type">通知先の種類</label>
+    <select id="type"><option value="user">個人</option><option value="group">グループ</option></select>
+    <label for="recipient">通知先ID</label>
+    <input id="recipient" required autocomplete="off" maxlength="33" placeholder="個人はU、グループはCで始まるID">
+    <label for="token">チャネルアクセストークン</label>
+    <input id="token" type="password" autocomplete="new-password" maxlength="4000" placeholder="空欄で保存するとトークンを削除">
+    <p class="note">後から変更・保存できます。トークンは設定表ではなくGASのスクリプトプロパティへ保存します。保存済みのトークンは画面へ返しません。</p>
+    <p class="note">変更後の新規通知・未送信分は新しい宛先を使用します。すでに送信を試みて結果が不明な分は、誤送信・重複を避けるため要確認として保留します。</p>
+    <button id="save" type="submit" disabled>保存</button>
+    <p id="status" role="status" aria-live="polite">読み込み中…</p>
+  </form>
+  <script>
+    const element = id => document.getElementById(id);
+    function failure() {
+      element('status').textContent = '処理に失敗しました。初期設定した本人で開いているか確認し、画面を開き直してください。';
+      element('save').disabled = false;
+    }
+    google.script.run.withSuccessHandler(settings => {
+      element('type').value = settings.type;
+      element('recipient').value = settings.recipient;
+      element('status').textContent = settings.hasToken ? 'トークン登録済み。空欄で保存すると削除されます。' : 'トークンを登録してください。';
+      element('save').disabled = false;
+    }).withFailureHandler(failure).getLineSettings();
+    element('line-form').addEventListener('submit', event => {
+      event.preventDefault();
+      element('save').disabled = true;
+      element('status').textContent = '保存中…';
+      const input = { type: element('type').value, recipient: element('recipient').value, token: element('token').value };
+      google.script.run.withSuccessHandler(() => {
+        element('token').value = '';
+        element('status').textContent = '保存しました。「通知設定 → テスト通知」で新しい通知先への到着を確認してください。';
+        element('save').disabled = false;
+      }).withFailureHandler(failure).saveLineSettings(input);
+    });
+  </script>
+</body>
+</html>
