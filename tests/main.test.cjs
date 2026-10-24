@@ -24,7 +24,12 @@ function fakeBook(id = 'sheet1') {
           return range;
         },
         getMaxRows: () => 1000, insertRowsAfter: () => sheet,
-        getLastRow: () => cells.length,
+        getLastRow() {
+          for (let i = cells.length - 1; i >= 0; i--) {
+            if ((cells[i] || []).some(value => value !== '' && value != null)) return i + 1;
+          }
+          return 0;
+        },
         setFrozenRows: () => sheet, setColumnWidth: () => sheet, hideSheet: () => sheet,
       };
       sheets.set(name, sheet);
@@ -173,6 +178,143 @@ test('failed trigger pair creation rolls back without touching previous config o
   assert.throws(() => c.startNotifications(), /トリガー/);
   assert.deepEqual(triggers, [prior]);
   assert.deepEqual(JSON.parse(data.ACTIVE_CONFIG), old);
+});
+
+function switchSetup(options = {}) {
+  const { context: c, data } = app();
+  c.initializeSettings();
+  const old = { enabled: true, calendarId: 'old-cal', requestedCalendarId: 'old-cal', prefix: '【面談】', epoch: 'old-epoch', startedAt: '2026-01-01T00:00:00Z', syncToken: 'old-token' };
+  data.ACTIVE_CONFIG = JSON.stringify(old);
+  data.CONFIG_SETTINGS = JSON.stringify({ calendarId: 'new-cal', prefix: '【面談】' });
+  data.DASHBOARD_STATUS = JSON.stringify({ state: '稼働中', detail: '継続', lastChecked: '2026-10-01T00:00:00Z' });
+  c.writeLedger_([['old-epoch|event', 'PENDING', '本文', 'retry-key', '', '', '']]);
+  const originalRows = c.readLedger_().map(row => row.slice());
+  const triggers = [
+    { source: 'old-cal', getHandlerFunction: () => 'onCalendarChanged', getUniqueId: () => 'old-calendar', getTriggerSourceId: () => 'old-cal' },
+    { source: 'old-cal', getHandlerFunction: () => 'pollCalendar', getUniqueId: () => 'old-poll', getTriggerSourceId: () => 'old-cal' },
+  ];
+  let deletes = 0;
+  const saved = [];
+  c.ScriptApp = {
+    getScriptId: () => 'script1',
+    getProjectTriggers: () => triggers.slice(),
+    deleteTrigger(trigger) {
+      deletes += 1;
+      if (options.failDelete === 'second' && deletes === 2) throw new Error('secret-delete');
+      if (options.failDelete === 'all') throw new Error('secret-delete');
+      const index = triggers.indexOf(trigger);
+      if (index >= 0) triggers.splice(index, 1);
+    },
+    newTrigger(fn) {
+      let source = null;
+      const builder = {
+        forUserCalendar(id) { source = id; return builder; },
+        onEventUpdated: () => builder,
+        timeBased: () => builder,
+        everyMinutes(n) { assert.equal(n, 5); return builder; },
+        create() {
+          const trigger = { source, getHandlerFunction: () => fn, getUniqueId: () => 'new-' + (triggers.length + 1), getTriggerSourceId: () => source };
+          triggers.push(trigger);
+          return trigger;
+        },
+      };
+      return builder;
+    },
+  };
+  c.Calendar = {
+    Calendars: { get: id => ({ id }) },
+    Events: { list: () => ({ items: [{ id: 'fresh', summary: '【面談】新規', created: '2099-01-01T00:00:00Z' }], nextSyncToken: 'new-token' }) },
+  };
+  const write = c.writeLedger_;
+  let configWrites = 0;
+  c.writeLedger_ = rows => {
+    if (options.failWrite) throw new Error('secret-ledger');
+    saved.push({
+      phase: 'ledger',
+      previous: triggers.filter(trigger => trigger.source === 'old-cal').length,
+      nextCalendar: triggers.filter(trigger => trigger.getTriggerSourceId() === 'new-cal').length,
+    });
+    return write(rows);
+  };
+  c.PropertiesService.getUserProperties = () => ({
+    getProperty: key => data[key] ?? null,
+    setProperty(key, value) {
+      if (key === 'ACTIVE_CONFIG') {
+        configWrites += 1;
+        saved.push({
+          phase: 'config',
+          previous: triggers.filter(trigger => trigger.source === 'old-cal').length,
+          nextCalendar: triggers.filter(trigger => trigger.getTriggerSourceId() === 'new-cal').length,
+        });
+        if (options.failConfig && configWrites === 1) throw new Error('secret-property');
+      }
+      data[key] = String(value);
+    },
+    setProperties: values => Object.assign(data, values),
+    deleteProperty: key => { delete data[key]; },
+  });
+  return { c, data, old, triggers, originalRows, saved };
+}
+
+test('calendar switch publishes the saved state before retiring the previous trigger pair', () => {
+  const { c, data, triggers, saved } = switchSetup();
+  c.startNotifications();
+  assert.ok(saved.some(step => step.phase === 'ledger' && step.previous === 2 && step.nextCalendar === 1));
+  assert.ok(saved.some(step => step.phase === 'config' && step.previous === 2 && step.nextCalendar === 1));
+  assert.equal(triggers.filter(trigger => trigger.source === 'old-cal').length, 0);
+  assert.equal(triggers.filter(trigger => trigger.source === 'new-cal' && trigger.getHandlerFunction() === 'onCalendarChanged').length, 1);
+  assert.equal(triggers.filter(trigger => trigger.getHandlerFunction() === 'pollCalendar').length, 1);
+  const config = JSON.parse(data.ACTIVE_CONFIG);
+  assert.equal(config.enabled, true);
+  assert.equal(config.calendarId, 'new-cal');
+  assert.equal(config.syncToken, 'new-token');
+  assert.equal(c.readLedger_().some(row => row[0] === 'old-epoch|event' && row[1] === 'SKIPPED'), true);
+  assert.equal(c.readLedger_().some(row => row[0].endsWith('|fresh') && row[1] === 'PENDING'), true);
+});
+
+test('ledger save failure while switching calendars keeps the previous monitoring pair', () => {
+  const { c, data, old, triggers, originalRows } = switchSetup({ failWrite: true });
+  assert.throws(() => c.startNotifications(), error => /通知履歴を保存できませんでした。以前の監視設定は維持されています。/.test(error.message) && !/secret/.test(error.message));
+  assert.deepEqual(c.readLedger_(), originalRows);
+  assert.deepEqual(JSON.parse(data.ACTIVE_CONFIG), old);
+  assert.deepEqual(triggers.map(trigger => trigger.getUniqueId()), ['old-calendar', 'old-poll']);
+  assert.equal(JSON.parse(data.DASHBOARD_STATUS).state, '稼働中');
+});
+
+test('config save failure while switching calendars restores the ledger and previous pair', () => {
+  const { c, data, old, triggers, originalRows } = switchSetup({ failConfig: true });
+  assert.throws(() => c.startNotifications(), error => /監視設定を保存できませんでした。以前の監視設定は維持されています。/.test(error.message) && !/secret/.test(error.message));
+  assert.deepEqual(c.readLedger_(), originalRows);
+  assert.deepEqual(JSON.parse(data.ACTIVE_CONFIG), old);
+  assert.deepEqual(triggers.map(trigger => trigger.getUniqueId()), ['old-calendar', 'old-poll']);
+  assert.equal(JSON.parse(data.DASHBOARD_STATUS).state, '稼働中');
+});
+
+test('partial removal of the previous trigger pair rolls back to that calendar', () => {
+  const { c, data, old, triggers, originalRows } = switchSetup({ failDelete: 'second' });
+  assert.throws(() => c.startNotifications(), error => /監視トリガーを整理できませんでした。以前の監視設定は維持されています。/.test(error.message) && !/secret/.test(error.message));
+  assert.deepEqual(c.readLedger_(), originalRows);
+  assert.deepEqual(JSON.parse(data.ACTIVE_CONFIG), old);
+  assert.equal(triggers.filter(trigger => trigger.source === 'new-cal').length, 0);
+  assert.equal(triggers.filter(trigger => trigger.getHandlerFunction() === 'onCalendarChanged' && trigger.getTriggerSourceId() === 'old-cal').length, 1);
+  assert.equal(triggers.filter(trigger => trigger.getHandlerFunction() === 'pollCalendar').length, 1);
+  assert.equal(JSON.parse(data.DASHBOARD_STATUS).state, '稼働中');
+});
+
+test('unremovable replacement triggers stop monitoring instead of leaving a mismatched calendar', () => {
+  const { c, data, triggers } = switchSetup({ failDelete: 'all' });
+  assert.throws(() => c.startNotifications(), error => /監視の切り替えに失敗したため停止しました/.test(error.message) && !/secret/.test(error.message));
+  const config = JSON.parse(data.ACTIVE_CONFIG);
+  assert.equal(config.enabled, false);
+  assert.equal(JSON.parse(data.DASHBOARD_STATUS).state, '停止中');
+  let lists = 0;
+  c.Calendar.Events.list = () => { lists++; return { items: [], nextSyncToken: 'unused' }; };
+  triggers.filter(trigger => ['pollCalendar', 'onCalendarChanged'].includes(trigger.getHandlerFunction())).forEach(trigger => {
+    const event = { triggerUid: trigger.getUniqueId(), calendarId: trigger.source };
+    if (trigger.getHandlerFunction() === 'pollCalendar') c.pollCalendar(event);
+    else c.onCalendarChanged(event);
+  });
+  assert.equal(lists, 0);
 });
 
 test('public trigger entry points require registered matching events and owner context', () => {
@@ -518,7 +660,7 @@ function sharedApp() {
     Session: { getEffectiveUser: () => ({ getEmail: () => effective }), getActiveUser: () => ({ getEmail: () => active }) },
     PropertiesService: {
       getScriptProperties: () => ({ getProperty: key => { assert.equal(key, 'WORKSPACE_DOMAINS'); return state.domains; } }),
-      getUserProperties: () => { const data = userData(); return { getProperty: key => data[key] ?? null, setProperty: (k, v) => { data[k] = String(v); }, setProperties: values => Object.assign(data, values) }; },
+      getUserProperties: () => { const data = userData(); return { getProperty: key => data[key] ?? null, setProperty: (k, v) => { data[k] = String(v); }, setProperties: values => Object.assign(data, values), deleteProperty: key => { delete data[key]; } }; },
     },
     LockService: { getScriptLock: () => assert.fail('global lock forbidden'), getUserLock: () => { const owner = effective; return {
       tryLock: () => { if (locks.has(owner)) return false; locks.add(owner); return true; },

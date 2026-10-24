@@ -67,16 +67,110 @@ function writeLedger_(rows) {
 
 function installMonitoringTriggers_(calendarId) {
   assertOwner_();
+  // Keep the working pair until the new ledger and ACTIVE_CONFIG are both stored.
   const previous = ScriptApp.getProjectTriggers().filter(isMonitoringTrigger_);
+  return { previous, created: createMonitoringTriggers_(calendarId) };
+}
+
+function createMonitoringTriggers_(calendarId) {
   const created = [];
   try {
     created.push(ScriptApp.newTrigger('onCalendarChanged').forUserCalendar(calendarId).onEventUpdated().create());
     created.push(ScriptApp.newTrigger('pollCalendar').timeBased().everyMinutes(5).create());
+    return created;
   } catch (_) {
-    created.forEach(t => ScriptApp.deleteTrigger(t));
+    created.forEach(trigger => { try { ScriptApp.deleteTrigger(trigger); } catch (__) {} });
     throw new Error('監視トリガーを作成できませんでした。権限と割当上限を確認してください。以前の監視設定は維持されています。');
   }
-  previous.forEach(t => ScriptApp.deleteTrigger(t));
+}
+
+function deleteMonitoringTriggers_(triggers) {
+  triggers.forEach(trigger => ScriptApp.deleteTrigger(trigger));
+}
+
+function restoreLedger_(rows) {
+  const sheet = ledgerSheet_();
+  const extras = sheet.getLastRow() - 1 - rows.length;
+  if (rows.length) writeLedger_(rows);
+  if (extras > 0) sheet.getRange(rows.length + 2, 1, extras, 7).clearContent();
+  SpreadsheetApp.flush();
+}
+
+function monitoringPairIntact_(calendarId) {
+  const triggers = ScriptApp.getProjectTriggers().filter(isMonitoringTrigger_);
+  if (triggers.length !== 2) return false;
+  const calendar = triggers.find(trigger => trigger.getHandlerFunction() === 'onCalendarChanged');
+  const poll = triggers.find(trigger => trigger.getHandlerFunction() === 'pollCalendar');
+  return !!(calendar && poll && typeof calendar.getTriggerSourceId === 'function' && calendar.getTriggerSourceId() === calendarId);
+}
+
+function safeStopMonitoring_() {
+  try {
+    const config = JSON.parse(props_().getProperty('ACTIVE_CONFIG') || 'null');
+    if (config && config.enabled) {
+      config.enabled = false;
+      props_().setProperty('ACTIVE_CONFIG', JSON.stringify(config));
+    }
+  } catch (_) {}
+  try {
+    ScriptApp.getProjectTriggers().filter(isMonitoringTrigger_).forEach(trigger => {
+      try { ScriptApp.deleteTrigger(trigger); } catch (__) {}
+    });
+  } catch (_) {}
+  try { setStatus_('停止中', '監視の切り替えに失敗したため停止しました。再開すると、その時点以降の新規予定が対象です。', false); }
+  catch (_) {}
+}
+
+function recoverMonitoring_(previousConfigJson, snapshotRows, created) {
+  try {
+    let removedNew = true;
+    created.forEach(trigger => {
+      try { ScriptApp.deleteTrigger(trigger); }
+      catch (_) { removedNew = false; }
+    });
+    // Disabling must win over restoring the old calendar while new triggers still exist.
+    if (!removedNew) throw new Error('new triggers remain');
+    if (snapshotRows) restoreLedger_(snapshotRows);
+    const p = props_();
+    if ((previousConfigJson || null) !== (p.getProperty('ACTIVE_CONFIG') || null)) {
+      if (previousConfigJson) p.setProperty('ACTIVE_CONFIG', previousConfigJson);
+      else if (typeof p.deleteProperty === 'function') p.deleteProperty('ACTIVE_CONFIG');
+      else throw new Error('config remains');
+    }
+    const previous = JSON.parse(previousConfigJson || 'null');
+    if (!previous || !previous.enabled) {
+      deleteMonitoringTriggers_(ScriptApp.getProjectTriggers().filter(isMonitoringTrigger_));
+      if (ScriptApp.getProjectTriggers().filter(isMonitoringTrigger_).length) throw new Error('triggers remain');
+      return true;
+    }
+    if (!monitoringPairIntact_(previous.calendarId)) {
+      deleteMonitoringTriggers_(ScriptApp.getProjectTriggers().filter(isMonitoringTrigger_));
+      createMonitoringTriggers_(previous.calendarId);
+    }
+    if (!monitoringPairIntact_(previous.calendarId)) throw new Error('pair missing');
+    return true;
+  } catch (_) {
+    safeStopMonitoring_();
+    return false;
+  }
+}
+
+function applyMonitoringChange_(calendarId, previousConfigJson, snapshotRows, commit) {
+  const installed = installMonitoringTriggers_(calendarId);
+  const previousTriggers = installed && Array.isArray(installed.previous) ? installed.previous : [];
+  const created = installed && Array.isArray(installed.created) ? installed.created : [];
+  let phase = 'history';
+  try {
+    commit(next => { phase = next; });
+    phase = 'triggers';
+    deleteMonitoringTriggers_(previousTriggers);
+  } catch (_) {
+    const restored = recoverMonitoring_(previousConfigJson, phase === 'history' ? null : snapshotRows, created);
+    if (!restored) throw new Error('監視の切り替えに失敗したため停止しました。再開すると、その時点以降の新規予定が対象です。');
+    if (phase === 'triggers') throw new Error('監視トリガーを整理できませんでした。以前の監視設定は維持されています。');
+    if (phase === 'ledger') throw new Error('監視設定を保存できませんでした。以前の監視設定は維持されています。');
+    throw new Error('通知履歴を保存できませんでした。以前の監視設定は維持されています。');
+  }
 }
 
 function isMonitoringTrigger_(trigger) {
@@ -98,11 +192,14 @@ function startMonitoring_() {
     try { settings.calendarId = Calendar.Calendars.get(settings.calendarId).id; }
     catch (_) { throw new Error('対象カレンダーを確認できません。カレンダーID・閲覧権限と割当上限を確認してください。'); }
     if (!settings.calendarId) throw new Error('対象カレンダーを確認できません。');
-    const previous = JSON.parse(p.getProperty('ACTIVE_CONFIG') || 'null');
+    const previousConfigJson = p.getProperty('ACTIVE_CONFIG');
+    const previous = JSON.parse(previousConfigJson || 'null');
     if (previous && previous.enabled && previous.calendarId === settings.calendarId && previous.prefix === settings.prefix) {
-      installMonitoringTriggers_(settings.calendarId);
-      previous.requestedCalendarId = settings.requestedCalendarId;
-      p.setProperty('ACTIVE_CONFIG', JSON.stringify(previous));
+      applyMonitoringChange_(settings.calendarId, previousConfigJson, null, mark => {
+        mark('ledger');
+        previous.requestedCalendarId = settings.requestedCalendarId;
+        p.setProperty('ACTIVE_CONFIG', JSON.stringify(previous));
+      });
       setStatus_('稼働中', '設定を確認しました。現在の監視を継続します。', false);
       return { message: '設定を確認しました。現在の監視を継続します。' };
     }
@@ -112,11 +209,15 @@ function startMonitoring_() {
     catch (_) { throw new Error('カレンダーの初回同期に失敗しました。閲覧権限・予定件数と割当上限を確認してください。以前の監視設定は維持されています。'); }
     const next = { ...settings, epoch: Utilities.getUuid(), startedAt, syncToken: baseline.token, enabled: true };
     const rows = readLedger_();
-    installMonitoringTriggers_(settings.calendarId);
+    const snapshot = rows.map(row => row.slice());
     rows.forEach(row => { if (row[1] === 'PENDING') row[1] = row[4] ? 'REVIEW' : 'SKIPPED'; });
     mergeChanges_(rows, baseline.items, next);
-    writeLedger_(rows);
-    p.setProperty('ACTIVE_CONFIG', JSON.stringify(next));
+    applyMonitoringChange_(settings.calendarId, previousConfigJson, snapshot, mark => {
+      mark('history');
+      writeLedger_(rows);
+      mark('ledger');
+      p.setProperty('ACTIVE_CONFIG', JSON.stringify(next));
+    });
     const message = '既存予定を通知せず監視を開始しました。カレンダー変更時と5分間隔の復旧確認で処理します。';
     setStatus_('稼働中', message, false);
     return { message };
